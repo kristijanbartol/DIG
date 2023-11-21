@@ -8,7 +8,10 @@ RUN apt update && apt install -y \
 	git \
 	wget \
 	vim \
-	unzip
+	unzip \
+	libglib2.0-0 \
+	libgl1-mesa-glx \
+	&& rm -rf /var/lib/apt/lists/*
 
 RUN conda install -c fvcore -c iopath -c conda-forge fvcore iopath
 
@@ -35,6 +38,7 @@ RUN pip install \
 	networkx \
 	chumpy \
 	torchgeometry \
-	scikit-image
+	scikit-image \
+	opencv-python
 
 WORKDIR /DIG

@@ -5,8 +5,11 @@ import numpy as np
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import Textures
 from numpy.random import randint
+import sys
 
-from utils.drapenet_structure import DrapeNetStructure
+#sys.path.append('/DIG/')
+
+from utils.drapenet_structure import DIGStructure
 from utils.mesh_utils import concatenate_meshes
 from utils.colors import (
     GarmentColors, 

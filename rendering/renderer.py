@@ -25,7 +25,7 @@ from pytorch3d.renderer import (
     BlendParams
 )
 
-from mesh_manager import ColoredGarmentsMeshManager
+from rendering.mesh_manager import ColoredGarmentsMeshManager
 
 
 class Renderer(nn.Module):

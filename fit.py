@@ -2,9 +2,11 @@ import argparse
 import numpy as np
 import os
 import torch
+from torch import nn
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import TexturesVertex
 
+from configs.paths import IMG_ROOTDIR
 from networks import (
     IGR,
     lbs_mlp,
@@ -18,8 +20,8 @@ from utils.deform import (
     rotate_root_pose_x
 )
 from utils.loaders import (
-    load_poseshape,
-    load_segmaps
+    load_gt,
+    prepare_gar,
 )
 
 
@@ -53,7 +55,7 @@ def get_mesh_sdf(
     return new_verts
 
 
-def update_z_shirt(
+def optimize_style(
         model_G,
         pose, 
         beta, 
@@ -78,15 +80,18 @@ def update_z_shirt(
     optimizer = torch.optim.Adam([{'params': z_style, 'lr': lr}])
 
     with torch.no_grad():
-        smpl_verts_pred, joints_pred, _, _, smpl_tfs = smpl_server.forward_verts(betas=beta,
-                                                transl=np.zeros(3,),
-                                                body_pose=pose[:, 3:],
-                                                global_orient=pose[:, :3],
-                                                return_verts=True,
-                                                return_full_pose=True,
-                                                v_template=smpl_server.v_template, rectify_root=False)
-        smpl_verts_pred = smpl_verts_pred.squeeze()
-        smpl_tfs = smpl_tfs.squeeze()
+        smpl_output = smpl_server(
+            betas=beta,
+            transl=np.zeros(3,),
+            body_pose=pose[:, 3:],
+            global_orient=pose[:, :3],
+            return_verts=True,
+            return_full_pose=True,
+            v_template=smpl_server.v_template, 
+            rectify_root=False
+        )
+        smpl_verts_pred = smpl_output['smpl_verts'].squeeze()
+        smpl_tfs = smpl_output['smpl_tfs'].squeeze()
         
         smpl_verts_pred.requires_grad = False 
         smpl_tfs.requires_grad = False 
@@ -164,10 +169,7 @@ def update_z_shirt(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--img_folder', type=str, default='demo/images')
-    parser.add_argument('--labels_folder', type=str, default='demo/npz')
-    parser.add_argument('--masks_folder', type=str, default='demo/masks')
-    parser.add_argument('--output_folder', type=str, default='output/')
+    parser.add_argument('--dataset', type=str, default='gar')
     args = parser.parse_args()
 
     ''' Load pretrained models and necessary files '''
@@ -225,14 +227,16 @@ if __name__ == '__main__':
         v_template=None
     )
     tfs_c_inv = smpl_server.tfs_c_inv.detach()
-    renderer = Renderer()
+    renderer = Renderer(device='cuda:0')
+    prepare_gar()
 
-    img_names = os.listdir(args.img_folder)
+    img_names = os.listdir(os.path.join(IMG_ROOTDIR, args.dataset))
 
     for img_name in img_names:
-        params_dict = load_params_dict(img_name)
-        seg_maps_dict = load_segmaps_dict(img_name)
-        for garment_idx, garment_part in enumerate(['shirt', 'pants']):
+        # NOTE: Currently, I am using DrapeNet silhouettes and parameters, but DIG model for optimization.
+        #       It should work but I shouldn't forget that detail.
+        masks_dict, params_dict = load_gt(img_name, 'gar')
+        for garment_idx, garment_part in enumerate(['upper', 'lower']):
             model_G = IGR.ImplicitNet_multiG(d_in=3+DIM_LATENT_G, skip_in=[4]).cuda().eval()
             model_G.load_state_dict(torch.load(f'extra-data/pretrained/{garment_part}.pth'))
             model_G = model_G.cuda().eval()
@@ -241,14 +245,18 @@ if __name__ == '__main__':
             model_rep.load_state_dict(torch.load(f'extra-data/pretrained/{garment_part}_rep.pth'))
             model_rep = model_rep.cuda().eval()
 
-            init_z_style = model_rep.weights[0]
+            #init_style = model_rep.weights[0]
+            init_style = model_rep.weights[0].detach()
+            pose_params = nn.Parameter(torch.from_numpy(params_dict['pose']))
+            shape_params = nn.Parameter(torch.from_numpy(params_dict['shape']))
+            mask_gt = torch.from_numpy(masks_dict[garment_part])
 
-            z_style_best = update_z_shirt(
+            optimal_style = optimize_style(
                 model_G,
-                pose, 
-                beta, 
-                init_z_style, 
-                seg_maps[garment_idx], 
+                pose_params, 
+                shape_params, 
+                init_style, 
+                masks_dict[garment_part], 
                 tfs_c_inv, 
                 shapedirs, 
                 tfs_weighted_zero, 
@@ -260,3 +268,4 @@ if __name__ == '__main__':
                 device='cuda:0', 
                 iters=100
             )
+        # TODO: Evaluate fitting (now use known style parameters).
